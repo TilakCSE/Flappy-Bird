@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Flappy Homegirl</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Fredoka+One&display=swap');
+        
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #333;
+            font-family: 'Fredoka One', cursive;
+            touch-action: none; 
+            user-select: none;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        .ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+        .interactive {
+            pointer-events: auto;
+        }
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- Start Screen -->
+    <div id="startScreen" class="ui-layer interactive bg-black/60 backdrop-blur-md">
+        <h1 class="text-5xl md:text-7xl text-yellow-400 drop-shadow-[0_5px_5px_rgba(0,0,0,0.8)] mb-4 text-center">FLAPPY<br>HOMEGIRL</h1>
+        
+        <div class="bg-white/90 p-6 rounded-2xl shadow-xl max-w-sm w-full mx-4 text-center">
+            <p class="text-gray-600 mb-6 text-lg">Tap or Spacebar to fly!</p>
+            <button id="btnStart" class="w-full bg-green-500 hover:bg-green-600 text-white text-2xl py-4 rounded-xl shadow-lg border-b-4 border-green-700 transition active:scale-95">
+                PLAY NOW 🔊
+            </button>
+        </div>
+    </div>
+
+    <!-- Game Over Screen -->
+    <div id="gameOverScreen" class="ui-layer interactive hidden bg-black/70">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl text-center max-w-sm w-full mx-4 border-4 border-red-500 animate-[bounce_1s_infinite]">
+            <h2 class="text-5xl text-red-500 mb-2 drop-shadow-md">WASTED</h2>
+            <div class="text-gray-800 text-xl mb-6">Score: <span id="finalScore" class="font-bold text-4xl">0</span></div>
+            
+            <button id="btnRestart" class="w-full bg-blue-500 hover:bg-blue-600 text-white text-2xl py-3 rounded-xl shadow-lg transform transition active:scale-95 border-b-4 border-blue-700">
+                Try Again
+            </button>
+        </div>
+    </div>
+
+    <!-- HUD -->
+    <div id="hud" class="ui-layer pointer-events-none hidden justify-start pt-10">
+        <div class="text-6xl text-white font-bold drop-shadow-[0_4px_4px_rgba(0,0,0,0.8)] stroke-black" id="scoreDisplay">0</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // --- ASSET CONFIGURATION ---
+        const assets = {
+            bird: new Image(),
+            music: new Audio('music.mp3'), // The looping meme song
+            die: new Audio('die.mp3')      // The laughing sound
+        };
+        
+        assets.bird.src = 'hero.jpg'; 
+        assets.music.loop = true; // Loop the music
+        assets.music.volume = 0.6; // Not too loud
+        assets.die.volume = 1.0;
+
+        // --- Game Variables ---
+        let frames = 0;
+        let score = 0;
+        let isGameRunning = false;
+        let isGameOver = false;
+
+        // UI References
+        const startScreen = document.getElementById('startScreen');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const hud = document.getElementById('hud');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const finalScoreDisplay = document.getElementById('finalScore');
+
+        // Bird Object
+        const bird = {
+            x: 50,
+            y: 150,
+            // BIGGER BIRD SETTINGS
+            w: 80, 
+            h: 80,
+            radius: 35, // Hitbox size
+            velocity: 0,
+            gravity: 0.15,      // EASY MODE: Gravity reduced (falls slower)
+            jumpStrength: -4.5, // EASY MODE: Jump isn't too crazy
+            rotation: 0,
+            
+            draw: function() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                this.rotation = Math.min(Math.PI / 4, Math.max(-Math.PI / 4, (this.velocity * 0.1)));
+                ctx.rotate(this.rotation);
+                
+                // Draw Circular Mask
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+                ctx.closePath();
+                ctx.clip();
+                
+                try {
+                    ctx.drawImage(assets.bird, -this.radius, -this.radius, this.w, this.h);
+                } catch (e) {
+                    ctx.fillStyle = 'yellow';
+                    ctx.fill();
+                }
+                
+                // Border
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+                ctx.lineWidth = 4;
+                ctx.strokeStyle = 'white';
+                ctx.stroke();
+                
+                ctx.restore();
+            },
+            
+            update: function() {
+                this.velocity += this.gravity;
+                this.y += this.velocity;
+                
+                // Floor Collision
+                if (this.y + this.radius >= canvas.height - 20) { 
+                    this.y = canvas.height - 20 - this.radius;
+                    gameOver();
+                }
+                // Ceiling limit
+                if (this.y - this.radius <= 0) {
+                    this.y = this.radius;
+                    this.velocity = 0;
+                }
+            },
+            
+            jump: function() {
+                this.velocity = this.jumpStrength;
+            }
+        };
+
+        // Pipes Object
+        const pipes = {
+            items: [],
+            w: 60,
+            gap: 230, // EASY MODE: Massive Gap (was 160)
+            dx: 2,    // EASY MODE: Slower speed (was 2.5)
+            
+            draw: function() {
+                for (let i = 0; i < this.items.length; i++) {
+                    let p = this.items[i];
+                    
+                    let grad = ctx.createLinearGradient(p.x, 0, p.x + this.w, 0);
+                    grad.addColorStop(0, '#4ade80'); 
+                    grad.addColorStop(1, '#166534'); 
+                    
+                    ctx.fillStyle = grad;
+                    ctx.fillRect(p.x, 0, this.w, p.top);
+                    ctx.fillRect(p.x, canvas.height - p.bottom, this.w, p.bottom);
+                    
+                    ctx.strokeStyle = '#052e16';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(p.x, 0, this.w, p.top);
+                    ctx.strokeRect(p.x, canvas.height - p.bottom, this.w, p.bottom);
+                }
+            },
+            
+            update: function() {
+                // Spacing between pipes (150 frames = more distance between pipes)
+                if (frames % 150 === 0) {
+                    let maxY = canvas.height - 20 - this.gap - 50; 
+                    let topHeight = Math.floor(Math.random() * (maxY - 50 + 1) + 50);
+                    
+                    this.items.push({
+                        x: canvas.width,
+                        top: topHeight,
+                        bottom: canvas.height - 20 - this.gap - topHeight,
+                        passed: false
+                    });
+                }
+                
+                for (let i = 0; i < this.items.length; i++) {
+                    let p = this.items[i];
+                    p.x -= this.dx;
+                    
+                    // Collision
+                    if (bird.x + bird.radius > p.x && bird.x - bird.radius < p.x + this.w) {
+                        if (bird.y - bird.radius < p.top || bird.y + bird.radius > canvas.height - p.bottom) {
+                            gameOver();
+                        }
+                    }
+                    
+                    // Score
+                    if (p.x + this.w < bird.x && !p.passed) {
+                        score++;
+                        scoreDisplay.innerText = score;
+                        p.passed = true;
+                    }
+                    
+                    if (p.x + this.w < 0) {
+                        this.items.shift();
+                        i--;
+                    }
+                }
+            }
+        };
+
+        const bg = {
+            x: 0,
+            draw: function() {
+                let skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                skyGrad.addColorStop(0, '#38bdf8'); 
+                skyGrad.addColorStop(1, '#a855f7'); 
+                ctx.fillStyle = skyGrad;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                ctx.fillStyle = '#854d0e';
+                ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
+                
+                ctx.fillStyle = '#65a30d';
+                ctx.fillRect(0, canvas.height - 20, canvas.width, 6);
+            }
+        };
+
+        // --- Game Loop ---
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            if(!isGameRunning) bird.y = canvas.height / 2;
+        }
+
+        function startGame() {
+            startScreen.classList.add('hidden');
+            hud.classList.remove('hidden');
+            hud.style.display = 'flex';
+            
+            bird.y = canvas.height / 2;
+            bird.velocity = 0;
+            pipes.items = [];
+            score = 0;
+            frames = 0;
+            scoreDisplay.innerText = 0;
+            isGameOver = false;
+            isGameRunning = true;
+            
+            // Audio Logic: Play Loop
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (AudioContext) new AudioContext().resume();
+            
+            assets.music.currentTime = 0;
+            assets.music.play().catch(e => console.log("Click to play audio"));
+        }
+
+        function gameOver() {
+            isGameRunning = false;
+            isGameOver = true;
+            
+            // Audio Logic: Stop Loop, Play Laugh
+            assets.music.pause();
+            assets.die.currentTime = 0;
+            assets.die.play();
+            
+            hud.style.display = 'none';
+            gameOverScreen.classList.remove('hidden');
+            finalScoreDisplay.innerText = score;
+        }
+
+        function loop() {
+            bg.draw();
+            
+            if (isGameRunning) {
+                pipes.update();
+                pipes.draw();
+                bird.update();
+                bird.draw();
+                frames++;
+            } else if (isGameOver) {
+                pipes.draw();
+                bird.draw();
+            } else {
+                bird.y = canvas.height/2 + Math.sin(Date.now()/300)*10;
+                bird.draw();
+            }
+            requestAnimationFrame(loop);
+        }
+
+        // --- Initialization ---
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && isGameRunning) bird.jump();
+        });
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (isGameRunning) bird.jump();
+        }, {passive: false});
+        canvas.addEventListener('mousedown', () => {
+            if (isGameRunning) bird.jump();
+        });
+
+        document.getElementById('btnStart').addEventListener('click', startGame);
+        document.getElementById('btnRestart').addEventListener('click', () => {
+            gameOverScreen.classList.add('hidden');
+            startGame();
+        });
+
+        loop();
+
+    </script>
+</body>
+</html>
